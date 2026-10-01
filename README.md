@@ -7,6 +7,22 @@ multiple-choice exam, and get a score calculated on the server.
 
 ---
 
+## Live
+
+| | |
+|---|---|
+| **App** | https://lms-platform-six-puce.vercel.app |
+| **API** | https://lms-platform-api.onrender.com |
+| **API docs** | https://lms-platform-api.onrender.com/docs |
+
+The API runs on Render's free tier, which spins down after 15 minutes of inactivity. **The first
+request after an idle period can take up to a minute** while the service wakes; everything after
+that is fast. If the login button appears to hang on your first visit, that is what is happening.
+
+Frontend on Vercel, API on Render, database on MongoDB Atlas (all free tiers).
+
+---
+
 ## User flow
 
 ```
