@@ -71,6 +71,13 @@ async def main() -> None:
     status, _ = call("GET", "/api/auth/me")
     check("no token returns 401", status == 401)
 
+    # The catalog was once reachable without a token while the README claimed
+    # otherwise; these assertions keep the code and the documented contract
+    # from drifting apart again.
+    for path in ("/api/domains", "/api/topics?domain_id=000000000000000000000000"):
+        status, _ = call("GET", path)
+        check(f"{path} requires a token", status == 401)
+
     print("\n3. Login")
     status, login = call("POST", "/api/auth/login", {"email": email, "password": "password123"})
     check("returns 200", status == 200)

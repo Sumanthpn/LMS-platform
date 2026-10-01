@@ -1,11 +1,20 @@
 from bson import ObjectId
 from bson.errors import InvalidId
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
+from app.core.security import get_current_user
 from app.db import get_db
 from app.models.catalog import Domain, DomainWithTopics, Topic
 
-router = APIRouter(prefix="/api", tags=["catalog"])
+# Auth is declared on the router rather than per route: every endpoint here
+# needs a valid token, none of them need the user object itself, so a
+# dependency on the router keeps three unused parameters out of the
+# signatures and makes it impossible to add an unprotected route by accident.
+router = APIRouter(
+    prefix="/api",
+    tags=["catalog"],
+    dependencies=[Depends(get_current_user)],
+)
 
 
 def parse_object_id(value: str, field: str) -> ObjectId:
