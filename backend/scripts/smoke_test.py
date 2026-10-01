@@ -180,8 +180,18 @@ async def main() -> None:
     status, history = call("GET", "/api/exams", token=token)
     check("lists all three attempts", status == 200 and len(history) == 3)
 
-    # Clean up the accounts this run created.
-    await db.users.delete_many({"email": {"$regex": "^(smoke|other)-"}})
+    # Clean up everything this run created, sessions first so none are left
+    # orphaned. Matching on the ids we were handed rather than on an email
+    # pattern keeps the delete scoped to this run, which matters when the
+    # target is a deployment rather than a throwaway local database.
+    created_users = [ObjectId(signup["user"]["id"]), ObjectId(other["user"]["id"])]
+    removed_sessions = await db.exam_sessions.delete_many({"user_id": {"$in": created_users}})
+    removed_users = await db.users.delete_many({"_id": {"$in": created_users}})
+    print(
+        f"Cleaned up {removed_users.deleted_count} test user(s) "
+        f"and {removed_sessions.deleted_count} exam session(s)."
+    )
+
     await disconnect()
     print("\nAll checks passed.\n")
 
