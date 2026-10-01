@@ -1,6 +1,15 @@
 """End-to-end check of the full user flow against a running API.
 
-Usage:  python -m scripts.smoke_test       (server must be on :8000)
+Usage:
+    python -m scripts.smoke_test            against a local server on :8000
+
+    $env:SMOKE_BASE = "https://your-api.onrender.com"
+    $env:MONGODB_URI = "mongodb+srv://..."
+    python -m scripts.smoke_test            against a deployment
+
+Both variables are needed for a deployment: SMOKE_BASE picks the API, and
+MONGODB_URI must point at the same database that API uses, because the score
+check is computed from the database rather than trusted from the response.
 
 Beyond exercising the happy path, this asserts the two rules the brief calls
 out: the answer key never reaches the client, and the backend owns scoring.
@@ -9,6 +18,7 @@ It talks to Mongo directly only to work out what the score *should* be.
 
 import asyncio
 import json
+import os
 import urllib.error
 import urllib.request
 import uuid
@@ -17,7 +27,8 @@ from bson import ObjectId
 
 from app.db import connect, disconnect, get_db
 
-BASE = "http://127.0.0.1:8000"
+# Defaults to a local server; set SMOKE_BASE to point at a deployment.
+BASE = os.environ.get("SMOKE_BASE", "http://127.0.0.1:8000").rstrip("/")
 
 
 def call(method: str, path: str, body: dict | None = None, token: str | None = None):
