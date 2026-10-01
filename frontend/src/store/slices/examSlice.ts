@@ -2,7 +2,14 @@ import { createAsyncThunk, createSlice, type PayloadAction } from "@reduxjs/tool
 
 import { api } from "@/lib/api";
 import { errorMessage } from "@/store/slices/authSlice";
-import type { AnswerMap, ExamQuestion, ExamResult, ExamSession, ExamSummary } from "@/types";
+import type {
+  AnswerMap,
+  ExamQuestion,
+  ExamResult,
+  ExamSession,
+  ExamSummary,
+  SavedAnswer,
+} from "@/types";
 
 type ExamStatus =
   | "idle"
@@ -23,6 +30,8 @@ interface ExamState {
   answers: AnswerMap;
   status: ExamStatus;
   error: string | null;
+  /** Whether the in-progress answers have reached the server. */
+  progressStatus: "idle" | "saving" | "saved" | "failed";
   result: ExamResult | null;
   history: ExamSummary[];
   historyStatus: "idle" | "loading" | "succeeded" | "failed";
@@ -37,6 +46,7 @@ const initialState: ExamState = {
   answers: {},
   status: "idle",
   error: null,
+  progressStatus: "idle",
   result: null,
   history: [],
   historyStatus: "idle",
@@ -65,6 +75,34 @@ export const loadExam = createAsyncThunk<ExamSession, string, { rejectValue: str
     }
   },
 );
+
+/**
+ * Persist the answers picked so far.
+ *
+ * Debounced by the exam page rather than fired on every click, so a run of
+ * quick selections collapses into one request.
+ */
+export const saveProgress = createAsyncThunk<
+  void,
+  void,
+  { state: { exam: ExamState }; rejectValue: string }
+>("exam/saveProgress", async (_, { getState, rejectWithValue }) => {
+  const { sessionId, answers } = getState().exam;
+  if (!sessionId) return;
+
+  const body = {
+    answers: Object.entries(answers).map(([question_id, selected_option]) => ({
+      question_id,
+      selected_option,
+    })),
+  };
+
+  try {
+    await api.put<void>(`/api/exams/${sessionId}/answers`, body);
+  } catch (error) {
+    return rejectWithValue(errorMessage(error));
+  }
+});
 
 export const submitExam = createAsyncThunk<
   ExamResult,
@@ -112,15 +150,37 @@ export const fetchHistory = createAsyncThunk<ExamSummary[], void, { rejectValue:
   },
 );
 
+function toAnswerMap(saved: SavedAnswer[]): AnswerMap {
+  const map: AnswerMap = {};
+  for (const answer of saved) {
+    if (answer.selected_option !== null) map[answer.question_id] = answer.selected_option;
+  }
+  return map;
+}
+
+/**
+ * Where to drop the user in when resuming: the first question they have not
+ * answered, or the last one if they have answered them all, since that is
+ * where Submit lives.
+ */
+function resumeIndex(questions: ExamQuestion[], answers: AnswerMap): number {
+  if (questions.length === 0) return 0;
+  const next = questions.findIndex((question) => !(question.id in answers));
+  return next === -1 ? questions.length - 1 : next;
+}
+
 function applySession(state: ExamState, session: ExamSession) {
+  const answers = toAnswerMap(session.answers ?? []);
+
   state.sessionId = session.id;
   state.domainName = session.domain_name;
   state.topicName = session.topic_name;
   state.questions = session.questions;
-  state.currentIndex = 0;
-  state.answers = {};
+  state.answers = answers;
+  state.currentIndex = resumeIndex(session.questions, answers);
   state.status = "active";
   state.error = null;
+  state.progressStatus = "idle";
   state.result = null;
 }
 
@@ -167,18 +227,23 @@ const examSlice = createSlice({
         state.status = "starting";
         state.error = null;
       })
-      .addCase(loadExam.fulfilled, (state, action) => {
-        // Preserve answers if we are reloading the session already on screen.
-        const sameSession = state.sessionId === action.payload.id;
-        const answers = sameSession ? state.answers : {};
-        const index = sameSession ? state.currentIndex : 0;
-        applySession(state, action.payload);
-        state.answers = answers;
-        state.currentIndex = Math.min(index, action.payload.questions.length - 1);
-      })
+      // Saved answers come back with the session, so a refresh or a resume
+      // rebuilds the attempt from the server rather than from memory.
+      .addCase(loadExam.fulfilled, (state, action) => applySession(state, action.payload))
       .addCase(loadExam.rejected, (state, action) => {
         state.status = "failed";
         state.error = action.payload ?? "Could not load the exam";
+      })
+      .addCase(saveProgress.pending, (state) => {
+        state.progressStatus = "saving";
+      })
+      .addCase(saveProgress.fulfilled, (state) => {
+        state.progressStatus = "saved";
+      })
+      // A failed save is surfaced as an indicator, not an error banner: it must
+      // not interrupt the exam, but the user should know answers are not stored.
+      .addCase(saveProgress.rejected, (state) => {
+        state.progressStatus = "failed";
       })
       .addCase(submitExam.pending, (state) => {
         state.status = "submitting";

@@ -45,6 +45,11 @@ export interface ExamQuestion {
   options: string[];
 }
 
+export interface SavedAnswer {
+  question_id: string;
+  selected_option: number | null;
+}
+
 export interface ExamSession {
   id: string;
   domain_id: string;
@@ -54,6 +59,8 @@ export interface ExamSession {
   status: string;
   started_at: string;
   questions: ExamQuestion[];
+  /** Answers already saved server-side, replayed on refresh or resume. */
+  answers: SavedAnswer[];
 }
 
 export interface QuestionResult {

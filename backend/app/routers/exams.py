@@ -9,6 +9,7 @@ from app.config import settings
 from app.core.security import CurrentUser
 from app.db import get_db
 from app.models.exam import (
+    AnswerSubmission,
     ExamResult,
     ExamSession,
     ExamSummary,
@@ -41,6 +42,25 @@ def _ordered_questions(question_ids: list[ObjectId], questions: list[dict]) -> l
     """Restore the order questions were drawn in; a $in query does not preserve it."""
     by_id = {q["_id"]: q for q in questions}
     return [by_id[qid] for qid in question_ids if qid in by_id]
+
+
+def _accepted_answers(
+    submitted: list[AnswerSubmission], allowed: set[ObjectId]
+) -> dict[ObjectId, int | None]:
+    """Keep only answers belonging to this session; last value wins on duplicates.
+
+    Discarding unknown question ids here is what stops a client scoring itself
+    on questions it was never served.
+    """
+    accepted: dict[ObjectId, int | None] = {}
+    for answer in submitted:
+        try:
+            question_id = ObjectId(answer.question_id)
+        except (InvalidId, TypeError):
+            continue
+        if question_id in allowed:
+            accepted[question_id] = answer.selected_option
+    return accepted
 
 
 @router.post("/start", response_model=ExamSession, status_code=status.HTTP_201_CREATED)
@@ -106,6 +126,7 @@ async def start_exam(payload: StartExamRequest, user: CurrentUser) -> ExamSessio
             "status": "in_progress",
             "started_at": started_at,
             "questions": questions,
+            "answers": [],
         }
     )
 
@@ -138,6 +159,37 @@ async def get_exam(session_id: str, user: CurrentUser) -> ExamSession:
     return ExamSession.model_validate({**session, "questions": ordered})
 
 
+@router.put("/{session_id}/answers", status_code=status.HTTP_204_NO_CONTENT)
+async def save_answers(session_id: str, payload: SubmitExamRequest, user: CurrentUser) -> None:
+    """Persist in-progress answers so a refresh or a resume does not lose them.
+
+    This only records what the user has picked. It never scores, and the saved
+    values are re-validated at submit time, so storing them early gives a
+    client no influence over its own result.
+    """
+    session = await _load_owned_session(session_id, user["_id"])
+
+    if session["status"] != "in_progress":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This exam has already been submitted",
+        )
+
+    accepted = _accepted_answers(payload.answers, set(session["question_ids"]))
+
+    # Preserve the order questions were drawn in rather than dict insertion order.
+    stored = [
+        {"question_id": question_id, "selected_option": accepted[question_id]}
+        for question_id in session["question_ids"]
+        if question_id in accepted and accepted[question_id] is not None
+    ]
+
+    await get_db().exam_sessions.update_one(
+        {"_id": session["_id"], "status": "in_progress"},
+        {"$set": {"answers": stored}},
+    )
+
+
 @router.post("/{session_id}/submit", response_model=ExamResult)
 async def submit_exam(session_id: str, payload: SubmitExamRequest, user: CurrentUser) -> ExamResult:
     db = get_db()
@@ -150,17 +202,7 @@ async def submit_exam(session_id: str, payload: SubmitExamRequest, user: Current
         )
 
     question_ids = session["question_ids"]
-    allowed = set(question_ids)
-
-    # Keep only answers belonging to this session; last value wins on duplicates.
-    submitted: dict[ObjectId, int | None] = {}
-    for answer in payload.answers:
-        try:
-            qid = ObjectId(answer.question_id)
-        except (InvalidId, TypeError):
-            continue
-        if qid in allowed:
-            submitted[qid] = answer.selected_option
+    submitted = _accepted_answers(payload.answers, set(question_ids))
 
     questions = await db.questions.find({"_id": {"$in": question_ids}}).to_list(None)
     by_id = {q["_id"]: q for q in questions}

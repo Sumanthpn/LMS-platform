@@ -18,8 +18,12 @@ function ResultContent() {
   const isCurrent = result?.id === sessionId;
 
   // Submitting already put the result in the store; fetch only on a direct visit.
+  //
+  // Bailing out on "failed" is what stops a retry loop: a rejected fetch sets
+  // that status, which re-runs this effect, which would fetch again forever.
   useEffect(() => {
-    if (!isCurrent && status !== "submitting") dispatch(fetchResult(sessionId));
+    if (isCurrent || status === "submitting" || status === "failed") return;
+    dispatch(fetchResult(sessionId));
   }, [dispatch, sessionId, isCurrent, status]);
 
   if (status === "failed" && !isCurrent) {

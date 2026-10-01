@@ -21,6 +21,13 @@ class StartExamRequest(BaseModel):
     topic_id: str
 
 
+class SavedAnswer(BaseModel):
+    """An answer already recorded against an in-progress session."""
+
+    question_id: PyObjectId
+    selected_option: int | None = None
+
+
 class ExamSession(MongoModel):
     domain_id: PyObjectId
     topic_id: PyObjectId
@@ -29,6 +36,8 @@ class ExamSession(MongoModel):
     status: str
     started_at: datetime
     questions: list[ExamQuestion]
+    # Answers saved so far, so a refresh or a resume restores the attempt.
+    answers: list[SavedAnswer] = []
 
 
 class AnswerSubmission(BaseModel):

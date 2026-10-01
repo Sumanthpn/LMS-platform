@@ -119,9 +119,55 @@ async def main() -> None:
     check("scores zero", result2["score"] == 0)
     check("still counts all questions", result2["total"] == len(exam2["questions"]))
 
-    print("\n11. Attempt history")
+    print("\n11. In-progress answers survive a reload")
+    _, exam3 = call("POST", "/api/exams/start", {"domain_id": domain["id"], "topic_id": topic["id"]}, token)
+    check("new exam starts with no saved answers", exam3["answers"] == [])
+
+    picked = [
+        {"question_id": q["id"], "selected_option": index % 4}
+        for index, q in enumerate(exam3["questions"][:3])
+    ]
+    status, _ = call("PUT", f"/api/exams/{exam3['id']}/answers", {"answers": picked}, token)
+    check("saving progress returns 204", status == 204)
+
+    status, reloaded = call("GET", f"/api/exams/{exam3['id']}", token=token)
+    saved = {a["question_id"]: a["selected_option"] for a in reloaded["answers"]}
+    check("returns 200", status == 200)
+    check("reload returns the saved answers", saved == {p["question_id"]: p["selected_option"] for p in picked})
+    check("reload still hides the answer key", "correct_option" not in json.dumps(reloaded))
+    check(
+        "question set is unchanged on reload",
+        [q["id"] for q in reloaded["questions"]] == [q["id"] for q in exam3["questions"]],
+    )
+
+    print("\n12. Saved progress cannot smuggle in a foreign question")
+    served = [ObjectId(q["id"]) for q in exam3["questions"]]
+    foreign = await db.questions.find_one({"_id": {"$nin": served}})
+    status, _ = call(
+        "PUT",
+        f"/api/exams/{exam3['id']}/answers",
+        {"answers": picked + [{"question_id": str(foreign["_id"]), "selected_option": 0}]},
+        token,
+    )
+    check("foreign question id is accepted but ignored", status == 204)
+    _, reloaded = call("GET", f"/api/exams/{exam3['id']}", token=token)
+    check("foreign answer was not stored", len(reloaded["answers"]) == len(picked))
+
+    print("\n13. Submitting scores the saved answers")
+    docs3 = await db.questions.find({"_id": {"$in": served}}).to_list(None)
+    correct_by_id = {str(d["_id"]): d["correct_option"] for d in docs3}
+    expected3 = sum(1 for p in picked if correct_by_id[p["question_id"]] == p["selected_option"])
+
+    status, result3 = call("POST", f"/api/exams/{exam3['id']}/submit", {"answers": picked}, token)
+    check("returns 200", status == 200)
+    check(f"score matches the saved answers ({result3['score']} == {expected3})", result3["score"] == expected3)
+
+    status, _ = call("PUT", f"/api/exams/{exam3['id']}/answers", {"answers": picked}, token)
+    check("saving after submit returns 409", status == 409)
+
+    print("\n14. Attempt history")
     status, history = call("GET", "/api/exams", token=token)
-    check("lists both attempts", status == 200 and len(history) == 2)
+    check("lists all three attempts", status == 200 and len(history) == 3)
 
     # Clean up the accounts this run created.
     await db.users.delete_many({"email": {"$regex": "^(smoke|other)-"}})

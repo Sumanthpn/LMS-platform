@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import AppShell from "@/components/AppShell";
 import DomainTopicPicker from "@/components/DomainTopicPicker";
 import { Alert, Button, Card, PageLoader, Spinner } from "@/components/ui";
+import { enterFullscreen } from "@/lib/fullscreen";
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
 import { fetchDomains } from "@/store/slices/catalogSlice";
 import { fetchHistory, resetExam, startExam } from "@/store/slices/examSlice";
@@ -45,6 +46,11 @@ function DashboardContent() {
 
   const handleStart = async () => {
     if (!domainId || !topicId) return;
+
+    // Fire this synchronously: the browser only grants fullscreen while the
+    // click gesture is live, and awaiting the request below would lose it.
+    void enterFullscreen();
+
     // Drop any previous session so stale answers cannot bleed into the new exam.
     dispatch(resetExam());
     const result = await dispatch(startExam({ domain_id: domainId, topic_id: topicId }));
@@ -152,7 +158,12 @@ function DashboardContent() {
                     <Button
                       variant="secondary"
                       className="px-3 py-1 text-xs"
-                      onClick={() => router.push(`/exam/${attempt.id}`)}
+                      onClick={() => {
+                        // Clear the previous attempt before opening this one,
+                        // so the exam page starts from the server's state.
+                        dispatch(resetExam());
+                        router.push(`/exam/${attempt.id}`);
+                      }}
                     >
                       Resume
                     </Button>

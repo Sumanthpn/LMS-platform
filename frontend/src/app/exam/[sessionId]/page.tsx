@@ -1,16 +1,19 @@
 "use client";
 
 import { useParams, useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import AppShell from "@/components/AppShell";
 import { Alert, Button, Card, PageLoader } from "@/components/ui";
+import { useFullscreen } from "@/hooks/useFullscreen";
+import { exitFullscreen } from "@/lib/fullscreen";
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
 import {
   goToQuestion,
   loadExam,
   nextQuestion,
   previousQuestion,
+  saveProgress,
   selectAnswer,
   submitExam,
 } from "@/store/slices/examSlice";
@@ -21,10 +24,21 @@ function ExamContent() {
   const params = useParams<{ sessionId: string }>();
   const sessionId = params.sessionId;
 
-  const { sessionId: loadedId, topicName, domainName, questions, currentIndex, answers, status, error } =
-    useAppSelector((state) => state.exam);
+  const {
+    sessionId: loadedId,
+    topicName,
+    domainName,
+    questions,
+    currentIndex,
+    answers,
+    status,
+    error,
+    progressStatus,
+  } = useAppSelector((state) => state.exam);
 
   const [confirming, setConfirming] = useState(false);
+  const { active: fullscreen, supported: fullscreenSupported, toggle: toggleFullscreen } =
+    useFullscreen();
 
   // Fetch the session if we arrived by direct link or page refresh, in which
   // case Redux is empty even though the exam exists on the server.
@@ -34,10 +48,42 @@ function ExamContent() {
     }
   }, [dispatch, sessionId, loadedId, status]);
 
-  // Submitting navigates to the result page.
+  // Save answers a beat after the last change, so a burst of quick selections
+  // becomes one request. The ref holds the last state we know the server has,
+  // which skips a pointless save of the answers we just restored from it.
+  const lastSaved = useRef<string | null>(null);
+
   useEffect(() => {
-    if (status === "submitted") router.replace(`/result/${sessionId}`);
-  }, [status, sessionId, router]);
+    if (status !== "active") return;
+
+    const snapshot = JSON.stringify(answers);
+    if (lastSaved.current === null) {
+      lastSaved.current = snapshot;
+      return;
+    }
+    if (lastSaved.current === snapshot) return;
+
+    const timer = setTimeout(() => {
+      lastSaved.current = snapshot;
+      void dispatch(saveProgress());
+    }, 500);
+
+    return () => clearTimeout(timer);
+  }, [answers, status, dispatch]);
+
+  // Submitting navigates to the result page. The exam is over, so drop out of
+  // fullscreen rather than leaving the user trapped in it on the result screen.
+  //
+  // `loadedId === sessionId` matters: resuming an exam leaves the previous
+  // attempt's "submitted" status in the store, and without this guard that
+  // stale status would bounce the user straight to a result that does not
+  // exist yet for the session they just opened.
+  useEffect(() => {
+    if (status === "submitted" && loadedId === sessionId) {
+      void exitFullscreen();
+      router.replace(`/result/${sessionId}`);
+    }
+  }, [status, loadedId, sessionId, router]);
 
   if (status === "failed") {
     return (
@@ -47,7 +93,13 @@ function ExamContent() {
           <Button variant="secondary" onClick={() => dispatch(loadExam(sessionId))}>
             Try again
           </Button>
-          <Button variant="ghost" onClick={() => router.replace("/dashboard")}>
+          <Button
+            variant="ghost"
+            onClick={() => {
+              void exitFullscreen();
+              router.replace("/dashboard");
+            }}
+          >
             Back to dashboard
           </Button>
         </div>
@@ -77,9 +129,33 @@ function ExamContent() {
           <h1 className="text-xl font-semibold tracking-tight">{topicName}</h1>
           <p className="text-sm text-slate-500">{domainName}</p>
         </div>
-        <p className="text-sm text-slate-500">
-          Question {currentIndex + 1} of {questions.length} · {answeredCount} answered
-        </p>
+        <div className="flex items-center gap-3">
+          <p className="text-sm text-slate-500">
+            Question {currentIndex + 1} of {questions.length} · {answeredCount} answered
+          </p>
+          {progressStatus !== "idle" && (
+            <span
+              className={`text-xs ${
+                progressStatus === "failed" ? "text-amber-700" : "text-slate-400"
+              }`}
+            >
+              {progressStatus === "saving"
+                ? "Saving…"
+                : progressStatus === "saved"
+                  ? "Answers saved"
+                  : "Not saved — check your connection"}
+            </span>
+          )}
+          {fullscreenSupported && (
+            <button
+              type="button"
+              onClick={() => void toggleFullscreen()}
+              className="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs text-slate-600 transition-colors hover:border-slate-400 hover:text-slate-900"
+            >
+              {fullscreen ? "Exit fullscreen" : "Fullscreen"}
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Progress bar doubles as a jump-to-question strip. */}
